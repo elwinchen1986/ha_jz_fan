@@ -43,6 +43,7 @@ class XDFan(FanEntity):
     _attr_has_entity_name = True
     _attr_name = None
     _attr_should_poll = False
+    _attr_translation_key = "fan"
     _attr_supported_features = (
         FanEntityFeature.SET_SPEED
         | FanEntityFeature.OSCILLATE

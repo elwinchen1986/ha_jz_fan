@@ -240,26 +240,30 @@ class XDFanController:
         notify_char = None
 
         def _pick_from_service(service) -> tuple:
-            w = n = None
+            # The mini-program only ever wrote to a characteristic exposing the
+            # standard ``write`` (write-with-response) property. Match that
+            # exactly: prefer a "write" characteristic; only fall back to a
+            # write-without-response one when no response-capable write exists.
+            w = w_no_resp = n = None
             for char in service.characteristics:
                 props = char.properties
-                if w is None and (
-                    "write" in props or "write-without-response" in props
-                ):
+                if w is None and "write" in props:
                     w = char
+                if w_no_resp is None and "write-without-response" in props:
+                    w_no_resp = char
                 if n is None and ("notify" in props or "indicate" in props):
                     n = char
-            return w, n
+            return (w or w_no_resp), n
 
-        # Primary strategy: the mini-program's services[2].
-        if len(services) > 2:
+        # Primary strategy: the mini-program's primary services[2].
+        if len(services) > 2 and getattr(services[2], "is_primary", True):
             write_char, notify_char = _pick_from_service(services[2])
             if write_char is not None:
                 _LOGGER.debug(
                     "XD fan using services[2] uuid=%s", services[2].uuid
                 )
 
-        # Fallback: scan every service (keep write & notify together).
+        # Fallback: scan every service, preferring a response-capable write.
         if write_char is None:
             for service in services:
                 w, n = _pick_from_service(service)

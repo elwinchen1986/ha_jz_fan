@@ -17,10 +17,7 @@
           "on": "mdi:led-on"
         }
       },
-      "voice": {
-        "default": "mdi:account-voice"
-      },
-         "trumpet": {
+      "trumpet": {
         "default": "mdi:bullhorn"
       }
     },

@@ -37,9 +37,6 @@
       "light": {
         "name": "指示灯"
       },
-      "voice": {
-        "name": "语音提示"
-      },
       "trumpet": {
         "name": "蜂鸣器"
       }

@@ -25,7 +25,6 @@ from .const import (
     IDX_TIMING,
     IDX_TRUMPET,
     IDX_UD_SWING,
-    IDX_VOICE,
     INIT_PACKETS,
     NO_CHANGE,
     OFF_VALUE,
@@ -48,7 +47,6 @@ class FanState:
         self.mode: int = 1
         self.timing: int = 0
         self.light: bool = False
-        self.voice: bool = False
         self.trumpet: bool = False
         self.available: bool = False
 
@@ -62,7 +60,6 @@ class FanState:
             "mode": self.mode,
             "timing": self.timing,
             "light": self.light,
-            "voice": self.voice,
             "trumpet": self.trumpet,
             "available": self.available,
         }
@@ -201,10 +198,6 @@ class XDFanController:
     async def async_set_light(self, on: bool) -> None:
         self.state.light = on
         await self._send_field(IDX_LIGHT, ON_VALUE if on else OFF_VALUE)
-
-    async def async_set_voice(self, on: bool) -> None:
-        self.state.voice = on
-        await self._send_field(IDX_VOICE, ON_VALUE if on else OFF_VALUE)
 
     async def async_set_trumpet(self, on: bool) -> None:
         self.state.trumpet = on
@@ -361,7 +354,6 @@ class XDFanController:
         s.mode = _decode_value(s.mode, n[IDX_MODE])
         s.timing = _decode_value(s.timing, n[IDX_TIMING])
         s.light = _decode_toggle(s.light, n[IDX_LIGHT])
-        s.voice = _decode_toggle(s.voice, n[IDX_VOICE])
         s.trumpet = _decode_toggle(s.trumpet, n[IDX_TRUMPET])
         _LOGGER.debug("XD fan state updated: %s", s.as_dict())
         self._notify_listeners()

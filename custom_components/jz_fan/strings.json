@@ -37,9 +37,6 @@
       "light": {
         "name": "Indicator light"
       },
-      "voice": {
-        "name": "Voice prompt"
-      },
       "trumpet": {
         "name": "Buzzer"
       }

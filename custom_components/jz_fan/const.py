@@ -11,7 +11,6 @@ Control packet (write):
     Byte 10 mode        1=sleep, 2=natural, 3=custom, 4=cycle_3d
     Byte 11 timing      0x00..0x0F (0..15 hours)
     Byte 12 light       0x01=off, 0x02=on
-    Byte 13 voice       0x01=off, 0x02=on
     Byte 14 trumpet     0x01=off, 0x02=on
     Any byte == 0xFF means "do not change".
 
@@ -57,7 +56,6 @@ IDX_MANUAL = 9
 IDX_MODE = 10
 IDX_TIMING = 11
 IDX_LIGHT = 12
-IDX_VOICE = 13
 IDX_TRUMPET = 14
 
 # Preset modes (mode field)

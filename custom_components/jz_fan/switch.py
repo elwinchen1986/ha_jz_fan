@@ -1,7 +1,7 @@
 """Switch platform for the XD Smart Fan (BLE) integration.
 
 Exposes the auxiliary toggles found in the control packet: indicator
-light, voice prompt and buzzer/trumpet.
+light and buzzer/trumpet.
 """
 from __future__ import annotations
 
@@ -36,12 +36,6 @@ SWITCHES: tuple[XDSwitchDescription, ...] = (
         translation_key="light",
         value_fn=lambda s: s.light,
         set_fn=lambda c, v: c.async_set_light(v),
-    ),
-    XDSwitchDescription(
-        key="voice",
-        translation_key="voice",
-        value_fn=lambda s: s.voice,
-        set_fn=lambda c, v: c.async_set_voice(v),
     ),
     XDSwitchDescription(
         key="trumpet",

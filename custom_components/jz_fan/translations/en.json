@@ -29,6 +29,44 @@
       "trumpet": {
         "name": "Buzzer"
       }
+    },
+    "select": {
+      "lr_swing": {
+        "name": "Horizontal swing angle",
+        "state": {
+          "off": "Off",
+          "30": "30°",
+          "60": "60°",
+          "90": "90°",
+          "120": "120°"
+        }
+      },
+      "ud_swing": {
+        "name": "Vertical swing angle",
+        "state": {
+          "off": "Off",
+          "30": "30°",
+          "60": "60°",
+          "120": "120°"
+        }
+      },
+      "timing": {
+        "name": "Sleep timer"
+      }
+    },
+    "button": {
+      "manual_up": {
+        "name": "Nudge up"
+      },
+      "manual_down": {
+        "name": "Nudge down"
+      },
+      "manual_left": {
+        "name": "Nudge left"
+      },
+      "manual_right": {
+        "name": "Nudge right"
+      }
     }
   }
 }

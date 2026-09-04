@@ -20,8 +20,33 @@
       "voice": {
         "default": "mdi:account-voice"
       },
-      "trumpet": {
+         "trumpet": {
         "default": "mdi:bullhorn"
+      }
+    },
+    "select": {
+      "lr_swing": {
+        "default": "mdi:arrow-left-right"
+      },
+      "ud_swing": {
+        "default": "mdi:arrow-up-down"
+      },
+      "timing": {
+        "default": "mdi:timer-outline"
+      }
+    },
+    "button": {
+      "manual_up": {
+        "default": "mdi:arrow-up-bold"
+      },
+      "manual_down": {
+        "default": "mdi:arrow-down-bold"
+      },
+      "manual_left": {
+        "default": "mdi:arrow-left-bold"
+      },
+      "manual_right": {
+        "default": "mdi:arrow-right-bold"
       }
     }
   }

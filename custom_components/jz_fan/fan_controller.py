@@ -176,9 +176,19 @@ class XDFanController:
         self.state.lr_swing = value
         await self._send_field(IDX_LR_SWING, value)
 
+    async def async_set_lr_swing_value(self, value: int) -> None:
+        """Set the left/right swing to a specific angle step (0..4)."""
+        self.state.lr_swing = value
+        await self._send_field(IDX_LR_SWING, value)
+
     async def async_set_ud_swing(self, value: int) -> None:
         self.state.ud_swing = value
         await self._send_field(IDX_UD_SWING, value)
+
+    async def async_set_manual(self, direction: int) -> None:
+        """Nudge the fan head in a direction (1=up 2=down 3=left 4=right)."""
+        self.state.manual = direction
+        await self._send_field(IDX_MANUAL, direction)
 
     async def async_set_mode(self, mode: int) -> None:
         self.state.mode = mode
@@ -205,27 +215,74 @@ class XDFanController:
     def _discover_characteristics(self, client: BleakClient) -> None:
         """Find writable and notify characteristics.
 
-        The mini-program used services[2] and picked the char with the
-        write / notify property. Here we scan all services for robustness.
+        Mirrors the WeChat mini-program logic: it used the 3rd primary
+        service (services[2]) and, within that single service, picked the
+        characteristic exposing the ``write`` property for writing and the
+        ``notify`` / ``indicate`` property for notifications.
+
+        We log every discovered service / characteristic so the actual GATT
+        layout can be verified, then apply the same "3rd service" selection
+        with a fallback that scans all services if needed.
         """
+        services = list(client.services)
+
+        # Log the full GATT layout for troubleshooting.
+        for s_idx, service in enumerate(services):
+            _LOGGER.debug("XD fan service[%d] uuid=%s", s_idx, service.uuid)
+            for char in service.characteristics:
+                _LOGGER.debug(
+                    "  char uuid=%s props=%s",
+                    char.uuid,
+                    ",".join(char.properties),
+                )
+
         write_char = None
         notify_char = None
-        for service in client.services:
+
+        def _pick_from_service(service) -> tuple:
+            w = n = None
             for char in service.characteristics:
                 props = char.properties
-                if write_char is None and (
+                if w is None and (
                     "write" in props or "write-without-response" in props
                 ):
-                    write_char = char
-                if notify_char is None and (
-                    "notify" in props or "indicate" in props
-                ):
-                    notify_char = char
+                    w = char
+                if n is None and ("notify" in props or "indicate" in props):
+                    n = char
+            return w, n
+
+        # Primary strategy: the mini-program's services[2].
+        if len(services) > 2:
+            write_char, notify_char = _pick_from_service(services[2])
+            if write_char is not None:
+                _LOGGER.debug(
+                    "XD fan using services[2] uuid=%s", services[2].uuid
+                )
+
+        # Fallback: scan every service (keep write & notify together).
+        if write_char is None:
+            for service in services:
+                w, n = _pick_from_service(service)
+                if w is not None:
+                    write_char = w
+                    notify_char = n if n is not None else notify_char
+                    _LOGGER.debug(
+                        "XD fan fallback service uuid=%s", service.uuid
+                    )
+                    break
+        if notify_char is None:
+            for service in services:
+                _, n = _pick_from_service(service)
+                if n is not None:
+                    notify_char = n
+                    break
+
         self._write_char = write_char
         self._notify_char = notify_char
         _LOGGER.debug(
-            "XD fan chars: write=%s notify=%s",
+            "XD fan selected chars: write=%s (props=%s) notify=%s",
             getattr(write_char, "uuid", None),
+            ",".join(write_char.properties) if write_char else None,
             getattr(notify_char, "uuid", None),
         )
         if write_char is None:
@@ -251,10 +308,35 @@ class XDFanController:
                 _LOGGER.warning("Write skipped, no write characteristic")
                 return
             data = bytes(packet)
-            _LOGGER.debug("XD fan write: %s", data.hex(" "))
-            await self._client.write_gatt_char(
-                self._write_char, data, response=False
+            # The mini-program used wx.writeBLECharacteristicValue, whose
+            # default write type is "write with response". Prefer that when
+            # the characteristic supports it, and fall back to
+            # write-without-response only when it is the sole option.
+            props = self._write_char.properties
+            use_response = "write" in props
+            if not use_response and "write-without-response" not in props:
+                # No standard write property advertised; try with response.
+                use_response = True
+            _LOGGER.debug(
+                "XD fan write (response=%s) to %s: %s",
+                use_response,
+                self._write_char.uuid,
+                data.hex(" "),
             )
+            try:
+                await self._client.write_gatt_char(
+                    self._write_char, data, response=use_response
+                )
+            except Exception as err:  # noqa: BLE001
+                # Some stacks reject the chosen write type; retry the other.
+                _LOGGER.debug(
+                    "XD fan write failed (response=%s): %s; retrying",
+                    use_response,
+                    err,
+                )
+                await self._client.write_gatt_char(
+                    self._write_char, data, response=not use_response
+                )
         # Pace consecutive writes like the original app.
         await asyncio.sleep(WRITE_DELAY)
 

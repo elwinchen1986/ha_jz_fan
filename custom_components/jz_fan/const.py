@@ -27,8 +27,8 @@ DOMAIN = "jz_fan"
 CONF_ADDRESS = "address"
 CONF_NAME = "name"
 
-# BLE write pacing (seconds) - the mini-program used 666ms between writes.
-WRITE_DELAY = 0.3
+# BLE write pacing (seconds) - the mini-program delayed each write by 666ms.
+WRITE_DELAY = 0.666
 
 # Protocol header for control packets
 CTRL_HEADER = [0xAA, 0x55, 0x10, 0x00, 0x0A]
@@ -73,3 +73,37 @@ PRESET_MODES = {
     "storm": MODE_STORM,
 }
 PRESET_MODES_REVERSE = {v: k for k, v in PRESET_MODES.items()}
+
+# Left/right swing angle steps (byte 7).
+# Mini-program: 0=off, 1=30°, 2=60°, 3=90°, 4=120°.
+LR_SWING_OPTIONS = {
+    "off": 0,
+    "30": 1,
+    "60": 2,
+    "90": 3,
+    "120": 4,
+}
+LR_SWING_OPTIONS_REVERSE = {v: k for k, v in LR_SWING_OPTIONS.items()}
+# The fan.oscillate on/off maps to the strongest angle when turned on.
+LR_SWING_ON_VALUE = 5
+
+# Up/down swing angle steps (byte 8).
+# Mini-program: 0=off, 1=30°, 2=60°, 3=120° (note: no 90°).
+UD_SWING_OPTIONS = {
+    "off": 0,
+    "30": 1,
+    "60": 2,
+    "120": 3,
+}
+UD_SWING_OPTIONS_REVERSE = {v: k for k, v in UD_SWING_OPTIONS.items()}
+
+# Manual direction (byte 9): momentary nudge of the fan head.
+# Mini-program: 1=up, 2=down, 3=left, 4=right (0=default/none).
+MANUAL_UP = 1
+MANUAL_DOWN = 2
+MANUAL_LEFT = 3
+MANUAL_RIGHT = 4
+
+# Timing / sleep timer in hours (byte 11): 0=cancel, 1..12 hours.
+MIN_TIMING = 0
+MAX_TIMING = 12

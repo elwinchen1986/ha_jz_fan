@@ -14,7 +14,12 @@ from .fan_controller import XDFanController
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.FAN, Platform.SWITCH]
+PLATFORMS: list[Platform] = [
+    Platform.FAN,
+    Platform.SWITCH,
+    Platform.SELECT,
+    Platform.BUTTON,
+]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

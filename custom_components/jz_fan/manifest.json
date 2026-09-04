@@ -1,0 +1,13 @@
+{
+  "domain": "jz_fan",
+  "name": "京造智能风扇",
+  "integration_type": "device",
+  "codeowners": ["@elwinchen1986"],
+  "config_flow": true,
+  "dependencies": ["bluetooth"],
+  "documentation": "https://github.com/elwinchen1986/ha_jz_fan",
+  "issue_tracker": "https://github.com/elwinchen1986/ha_jz_fan/issues",
+  "iot_class": "local_push",
+  "requirements": ["bleak>=0.21.0", "bleak-retry-connector>=3.4.0"],
+  "version": "1.0.0"
+}

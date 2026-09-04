@@ -1,0 +1,28 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "icon": "mdi:fan"
+      },
+      "confirm": {
+        "icon": "mdi:fan"
+      }
+    }
+  },
+  "entity": {
+    "switch": {
+      "light": {
+        "default": "mdi:led-off",
+        "state": {
+          "on": "mdi:led-on"
+        }
+      },
+      "voice": {
+        "default": "mdi:account-voice"
+      },
+      "trumpet": {
+        "default": "mdi:bullhorn"
+      }
+    }
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "京造智能风扇",
+        "description": "选择要添加的蓝牙风扇。",
+        "data": {
+          "address": "设备"
+        }
+      },
+      "confirm": {
+        "title": "京造智能风扇",
+        "description": "是否要设置 {name}?"
+      }
+    },
+    "abort": {
+      "no_devices_found": "未发现蓝牙设备。请确认风扇已开机并处于附近。",
+      "already_configured": "该设备已配置。"
+    }
+  },
+  "entity": {
+    "switch": {
+      "light": {
+        "name": "指示灯"
+      },
+      "voice": {
+        "name": "语音提示"
+      },
+      "trumpet": {
+        "name": "蜂鸣器"
+      }
+    }
+  }
+}

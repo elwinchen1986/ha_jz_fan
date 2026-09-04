@@ -1,0 +1,34 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "京造智能风扇",
+        "description": "Select the Bluetooth fan to add.",
+        "data": {
+          "address": "Device"
+        }
+      },
+      "confirm": {
+        "title": "京造智能风扇",
+        "description": "Do you want to set up {name}?"
+      }
+    },
+    "abort": {
+      "no_devices_found": "No Bluetooth devices found. Make sure the fan is powered on and nearby.",
+      "already_configured": "This device is already configured."
+    }
+  },
+  "entity": {
+    "switch": {
+      "light": {
+        "name": "Indicator light"
+      },
+      "voice": {
+        "name": "Voice prompt"
+      },
+      "trumpet": {
+        "name": "Buzzer"
+      }
+    }
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "name": "京造智能风扇 (JZ Smart Fan BLE)",
+  "render_readme": true,
+  "homeassistant": "2024.1.0"
+}

@@ -2,8 +2,6 @@
 
 Home Assistant 自定义集成，通过蓝牙 (BLE) 直接控制京造智能风扇，无需网关、无需云端，纯本地控制。
 
-> 协议由京造风扇微信小程序逆向分析得到。
-
 ---
 
 ## 功能特性
@@ -46,13 +44,6 @@ cp -r custom_components/jz_fan /path/to/your/ha/config/custom_components/
 3. 搜索 **京造智能风扇**
 4. 从扫描到的蓝牙设备列表中选择你的风扇（名称含 `BT2G` / `F008` 等的会排在前面）
 5. 确认添加即可
-
----
-
-## 图标说明
-
-- 集成内的**配置流程与实体图标**由 [`icons.json`](custom_components/jz_fan/icons.json) 提供（MDI 图标），安装后即生效。
-- 集成列表 / 设备页顶部的**品牌 Logo**由官方 [home-assistant/brands](https://github.com/home-assistant/brands) 仓库统一提供，需将 [`brand/icon.png`](brand/) 提交到该仓库的 `custom_integrations/jz_fan/` 目录，PR 合并后自动显示。详见 [`brand/README.md`](brand/README.md)。
 
 ---
 

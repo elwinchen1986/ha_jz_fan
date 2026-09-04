@@ -1,1 +1,0 @@
-- [XD/京造风扇型号与协议映射](project_xd_fan_models.md) — XD-2038FA/2988FA/KF-2988A 共用同一 BLE 控制组件与协议，控制包字节布局

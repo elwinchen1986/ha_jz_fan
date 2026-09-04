@@ -23,6 +23,7 @@ from .const import (
     DOMAIN,
     LR_SWING_OPTIONS,
     LR_SWING_OPTIONS_REVERSE,
+    MAX_TIMING,
     UD_SWING_OPTIONS,
     UD_SWING_OPTIONS_REVERSE,
 )
@@ -63,7 +64,7 @@ SELECTS: tuple[XDSelectDescription, ...] = (
     XDSelectDescription(
         key="timing",
         translation_key="timing",
-        options=["off"] + [str(i) for i in range(1, 13)],
+        options=["off"] + [str(i) for i in range(1, MAX_TIMING + 1)],
         current_fn=lambda s: _timing_value_to_option(s.timing),
         select_fn=lambda c, o: c.async_set_timing(_timing_option_to_value(o)),
     ),

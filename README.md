@@ -104,6 +104,10 @@ logger:
 
 ## 更新日志
 
+### v1.1.5
+
+- 集成内置品牌图标，安装后可在 Home Assistant 界面直接显示（需 Home Assistant 2026.3 及以上版本）
+
 ### v1.1.4
 
 - 修复风扇预设模式显示为英文的问题（补充实体 translation_key，中文翻译生效）

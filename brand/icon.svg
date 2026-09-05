@@ -17,11 +17,11 @@
     </filter>
   </defs>
 
-  <!-- Rounded square background -->
-  <rect x="36" y="36" width="440" height="440" rx="96" fill="url(#bg)"/>
+  <!-- Rounded square background (fills full canvas) -->
+  <rect x="0" y="0" width="512" height="512" rx="112" fill="url(#bg)"/>
 
-  <!-- Fan group (upper area) -->
-  <g transform="translate(256,200)" filter="url(#soft)">
+  <!-- Fan group (upper-center) -->
+  <g transform="translate(256,224)" filter="url(#soft)">
     <!-- Three curved blades, rotated 120 deg each -->
     <g fill="url(#blade)">
       <path d="M0,0 C 34,-92 24,-150 -6,-150 C -40,-150 -34,-96 0,0 Z"
@@ -38,7 +38,7 @@
   </g>
 
   <!-- "京造" text (lower area) -->
-  <text x="256" y="430" text-anchor="middle"
+  <text x="256" y="452" text-anchor="middle"
         font-family="'PingFang SC','Hiragino Sans GB','STHeiti','Songti SC',sans-serif"
         font-weight="600" font-size="112" fill="#FFFFFF"
         letter-spacing="6">京造</text>

@@ -143,7 +143,16 @@ class XDFanController:
             self.state.available = True
             self._notify_listeners()
 
-        # Send init packets (outside lock uses its own write locking)
+        # Give the device a moment to be ready after the connection is
+        # established and notifications are subscribed. The mini-program
+        # delayed every write by 666ms, so the query packets below are only
+        # sent once the link has settled and the notify subscription is
+        # active - otherwise the device's first status frame can be lost.
+        await asyncio.sleep(WRITE_DELAY)
+
+        # Send init / query packets. These ask the fan to report its full
+        # 15-byte status frame back over the notify characteristic, which is
+        # what populates the initial state (echo) after connecting.
         for pkt in INIT_PACKETS:
             await self._write(pkt)
 
@@ -256,7 +265,21 @@ class XDFanController:
                     "XD fan using services[2] uuid=%s", services[2].uuid
                 )
 
-        # Fallback: scan every service, preferring a response-capable write.
+        # Fallback: scan every service. The mini-program relied on write and
+        # notify living on the *same* service, so prefer a service that
+        # exposes both - otherwise we may subscribe to the wrong notify
+        # characteristic and never receive the device's status echo.
+        if write_char is None:
+            for service in services:
+                w, n = _pick_from_service(service)
+                if w is not None and n is not None:
+                    write_char, notify_char = w, n
+                    _LOGGER.debug(
+                        "XD fan fallback service (write+notify) uuid=%s",
+                        service.uuid,
+                    )
+                    break
+        # Secondary fallback: any service with a writable characteristic.
         if write_char is None:
             for service in services:
                 w, n = _pick_from_service(service)
@@ -264,7 +287,8 @@ class XDFanController:
                     write_char = w
                     notify_char = n if n is not None else notify_char
                     _LOGGER.debug(
-                        "XD fan fallback service uuid=%s", service.uuid
+                        "XD fan fallback service (write only) uuid=%s",
+                        service.uuid,
                     )
                     break
         if notify_char is None:

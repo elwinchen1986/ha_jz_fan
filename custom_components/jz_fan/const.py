@@ -31,10 +31,22 @@ WRITE_DELAY = 0.666
 # Protocol header for control packets
 CTRL_HEADER = [0xAA, 0x55, 0x10, 0x00, 0x0A]
 
-# Init packets sent right after connecting
+# Init / handshake packets sent right after connecting.
+#
+# The mini-program sends three packets on connect. The third packet
+# (0xAA 0x55 0x80 0x00 0x01 <code>) carries a "bind code" parsed from the
+# device QR code (TLV field 0x03). Empirically the device only starts
+# pushing status frames over notify AFTER it receives this bind handshake,
+# which is why a persistent HA connection that only sent the first two
+# packets never received any echo/state notifications.
+#
+# The bind code is the same (0x04) across all of these devices (they share
+# a single QR code), so it is a fixed constant rather than a config option.
+BIND_CODE = 0x04
 INIT_PACKETS = [
     [0xAA, 0x55, 0x21, 0x00, 0x01],
     [0xAA, 0x55, 0x10, 0x00, 0x01, 0x00],
+    [0xAA, 0x55, 0x80, 0x00, 0x01, BIND_CODE],
 ]
 
 # Query packet that asks the fan to report its full 15-byte status frame.

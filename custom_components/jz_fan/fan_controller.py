@@ -104,6 +104,10 @@ class XDFanController:
         self._update_callbacks: list[Callable[[], None]] = []
         self._poll_task: asyncio.Task | None = None
         self._poll_interval: float = poll_interval
+        # The running HA event loop, captured on connect. BLE notify
+        # callbacks fire on a different thread, so listeners must be
+        # dispatched back onto this loop before touching HA state.
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     # ---- public API -------------------------------------------------------
 
@@ -127,6 +131,9 @@ class XDFanController:
 
     async def async_connect(self) -> None:
         """Establish connection, discover characteristics, subscribe, init."""
+        # Remember the loop we run on so notify callbacks (fired on a
+        # separate BLE thread) can be marshalled back safely.
+        self._loop = asyncio.get_running_loop()
         async with self._lock:
             if self._client and self._client.is_connected:
                 return
@@ -445,5 +452,22 @@ class XDFanController:
         self._notify_listeners()
 
     def _notify_listeners(self) -> None:
-        for cb in list(self._update_callbacks):
-            cb()
+        """Notify listeners on the HA event loop.
+
+        BLE notifications arrive on a background thread, but the listeners
+        call ``async_write_ha_state()`` which is *not* thread-safe and must
+        run on the event loop. When a loop is known, marshal the callbacks
+        onto it with ``call_soon_threadsafe``; otherwise call directly (e.g.
+        before the first connection).
+        """
+        loop = self._loop
+        callbacks = list(self._update_callbacks)
+
+        def _run() -> None:
+            for cb in callbacks:
+                cb()
+
+        if loop is not None and loop.is_running():
+            loop.call_soon_threadsafe(_run)
+        else:
+            _run()

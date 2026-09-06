@@ -57,11 +57,6 @@ BUTTONS: tuple[XDButtonDescription, ...] = (
         translation_key="manual_right",
         press_fn=lambda c: c.async_set_manual(MANUAL_RIGHT),
     ),
-    XDButtonDescription(
-        key="refresh_state",
-        translation_key="refresh_state",
-        press_fn=lambda c: c.async_query_state(),
-    ),
 )
 
 

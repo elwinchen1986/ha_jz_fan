@@ -23,7 +23,6 @@ DOMAIN = "jz_fan"
 # Config entry keys
 CONF_ADDRESS = "address"
 CONF_NAME = "name"
-CONF_POLL_INTERVAL = "poll_interval"
 
 # BLE write pacing (seconds) - the mini-program delayed each write by 666ms.
 WRITE_DELAY = 0.666
@@ -48,24 +47,6 @@ INIT_PACKETS = [
     [0xAA, 0x55, 0x10, 0x00, 0x01, 0x00],
     [0xAA, 0x55, 0x80, 0x00, 0x01, BIND_CODE],
 ]
-
-# Query packet that asks the fan to report its full 15-byte status frame.
-# The mini-program sends this once on connect; a persistent HA connection
-# must poll it periodically so that state changes made physically (buttons /
-# remote) are reflected back into Home Assistant.
-#
-# Cmd byte 0x10 means "report status"; the device replies on the notify
-# characteristic with the full 15-byte state frame. The two-byte tail
-# (0x01 0x00) is the documented query suffix observed on this firmware.
-QUERY_PACKET = [0xAA, 0x55, 0x10, 0x00, 0x01, 0x00]
-
-# How often to poll the fan for its current status (seconds).
-POLL_INTERVAL = 10
-
-# Bounds and default for the user-configurable poll interval (seconds).
-MIN_POLL_INTERVAL = 3
-MAX_POLL_INTERVAL = 300
-DEFAULT_POLL_INTERVAL = POLL_INTERVAL
 
 # Placeholder meaning "no change"
 NO_CHANGE = 0xFF

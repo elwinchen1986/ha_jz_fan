@@ -18,17 +18,6 @@
       "already_configured": "该设备已配置。"
     }
   },
-  "options": {
-    "step": {
-      "init": {
-        "title": "京造智能风扇",
-        "description": "调整通过蓝牙轮询风扇状态的间隔。",
-        "data": {
-          "poll_interval": "状态轮询间隔(秒)"
-        }
-      }
-    }
-  },
   "entity": {
     "fan": {
       "fan": {
@@ -87,9 +76,6 @@
       },
       "manual_right": {
         "name": "手动向右"
-      },
-      "refresh_state": {
-        "name": "刷新状态"
       }
     }
   }

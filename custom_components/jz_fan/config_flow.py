@@ -10,21 +10,14 @@ from homeassistant.components.bluetooth import (
     async_discovered_service_info,
 )
 from homeassistant.config_entries import (
-    ConfigEntry,
     ConfigFlow,
     ConfigFlowResult,
-    OptionsFlow,
 )
 from homeassistant.const import CONF_ADDRESS
-from homeassistant.core import callback
 
 from .const import (
     CONF_NAME,
-    CONF_POLL_INTERVAL,
-    DEFAULT_POLL_INTERVAL,
     DOMAIN,
-    MAX_POLL_INTERVAL,
-    MIN_POLL_INTERVAL,
 )
 
 # Advertised name fragments seen on XD fans (BT2G / model suffix like F008).
@@ -44,12 +37,6 @@ class XDFanConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for XD Smart Fan."""
 
     VERSION = 1
-
-    @staticmethod
-    @callback
-    def async_get_options_flow(config_entry) -> "XDFanOptionsFlow":
-        """Return the options flow handler."""
-        return XDFanOptionsFlow(config_entry)
 
     def __init__(self) -> None:
         self._discovered: BluetoothServiceInfoBleak | None = None
@@ -127,37 +114,6 @@ class XDFanConfigFlow(ConfigFlow, domain=DOMAIN):
                 {
                     vol.Required(CONF_ADDRESS): vol.In(
                         {addr: f"{name} ({addr})" for addr, name in devices}
-                    )
-                }
-            ),
-        )
-
-
-class XDFanOptionsFlow(OptionsFlow):
-    """Handle options for XD Smart Fan (e.g. state poll interval)."""
-
-    def __init__(self, config_entry: ConfigEntry) -> None:
-        self._config_entry = config_entry
-
-    async def async_step_init(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        """Manage the options."""
-        if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
-
-        current = self._config_entry.options.get(
-            CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL
-        )
-        return self.async_show_form(
-            step_id="init",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(
-                        CONF_POLL_INTERVAL, default=current
-                    ): vol.All(
-                        vol.Coerce(int),
-                        vol.Range(min=MIN_POLL_INTERVAL, max=MAX_POLL_INTERVAL),
                     )
                 }
             ),

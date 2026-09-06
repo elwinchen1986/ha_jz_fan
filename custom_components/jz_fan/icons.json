@@ -44,9 +44,6 @@
       },
       "manual_right": {
         "default": "mdi:arrow-right-bold"
-      },
-      "refresh_state": {
-        "default": "mdi:refresh"
       }
     }
   }

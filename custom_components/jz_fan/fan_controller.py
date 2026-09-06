@@ -85,6 +85,21 @@ def _decode_value(current: int, raw: int) -> int:
     return raw
 
 
+def _is_standard_service(uuid: str) -> bool:
+    """Return True for the standard GATT services we should skip.
+
+    0x1800 (Generic Access) and 0x1801 (Generic Attribute) never carry the
+    fan's private control/notify characteristics. bleak may enumerate them at
+    an index the mini-program assumed was a private service, so we skip them
+    explicitly rather than relying on enumeration order.
+    """
+    u = str(uuid).lower()
+    return u.startswith("00001800") or u.startswith("00001801") or u in (
+        "1800",
+        "1801",
+    )
+
+
 class XDFanController:
     """Manages a persistent BLE connection to one XD fan."""
 
@@ -97,8 +112,17 @@ class XDFanController:
         self._device = device
         self._address = address
         self._client: BleakClient | None = None
+        # Primary write characteristic (first private-service writable char).
         self._write_char: BleakGATTCharacteristic | None = None
-        self._notify_char: BleakGATTCharacteristic | None = None
+        # Every writable characteristic found across private services. The
+        # mini-program wrote to *each* write characteristic of the target
+        # service, so we mirror that "write to all" behaviour.
+        self._write_chars: list[BleakGATTCharacteristic] = []
+        # Every notify/indicate characteristic found across private services.
+        # The mini-program subscribed to *all* of them (its global
+        # onBLECharacteristicValueChange handler received data from any of
+        # them), so we subscribe to all rather than guessing one.
+        self._notify_chars: list[BleakGATTCharacteristic] = []
         self._lock = asyncio.Lock()
         self.state = FanState()
         self._update_callbacks: list[Callable[[], None]] = []
@@ -147,40 +171,36 @@ class XDFanController:
             self._client = client
             self._discover_characteristics(client)
 
-            if self._notify_char is not None:
+            # Subscribe to *every* notify/indicate characteristic found on
+            # the private services. The mini-program did the same (its
+            # global value-change handler received frames from any of them),
+            # and on this device the status echo can arrive on a notify
+            # characteristic other than the first one we would have guessed.
+            subscribed: list[str] = []
+            for notify_char in self._notify_chars:
                 try:
                     _LOGGER.info(
                         "Subscribing to notify on %s (props=%s)",
-                        self._notify_char.uuid,
-                        ",".join(self._notify_char.properties),
+                        notify_char.uuid,
+                        ",".join(notify_char.properties),
                     )
-                    await client.start_notify(
-                        self._notify_char, self._on_notify
-                    )
-                    _LOGGER.info(
-                        "XD fan subscribed to notify %s",
-                        self._notify_char.uuid,
-                    )
+                    await client.start_notify(notify_char, self._on_notify)
+                    subscribed.append(notify_char.uuid)
                 except Exception as err:  # noqa: BLE001
                     _LOGGER.error(
-                        "XD fan start_notify on %s failed: %s; "
-                        "no state echo will arrive",
-                        self._notify_char.uuid,
+                        "XD fan start_notify on %s failed: %s",
+                        notify_char.uuid,
                         err,
                     )
+            if subscribed:
+                _LOGGER.info(
+                    "XD fan subscribed to notify chars: %s",
+                    ", ".join(subscribed),
+                )
             else:
-                # Dump every candidate notify-capable characteristic we
-                # discovered, so the user can see *why* none was picked.
-                candidates: list[tuple[str, str]] = []
-                for service in services:
-                    for ch in service.characteristics:
-                        props = ",".join(ch.properties)
-                        if "notify" in props or "indicate" in props:
-                            candidates.append((ch.uuid, props))
                 _LOGGER.error(
-                    "XD fan has no notify characteristic; state will not "
-                    "update. Notify/indicate candidates seen: %s",
-                    candidates or "<none>",
+                    "XD fan has no notify characteristic subscribed; "
+                    "state will not update"
                 )
 
             self.state.available = True
@@ -203,8 +223,8 @@ class XDFanController:
             "XD fan connected and initialized: write=%s notify=%s "
             "subscribed=%s",
             getattr(self._write_char, "uuid", None),
-            getattr(self._notify_char, "uuid", None),
-            self._notify_char is not None,
+            [c.uuid for c in self._notify_chars],
+            len(self._notify_chars) > 0,
         )
 
     async def async_disconnect(self) -> None:
@@ -212,8 +232,11 @@ class XDFanController:
         async with self._lock:
             if self._client and self._client.is_connected:
                 try:
-                    if self._notify_char is not None:
-                        await self._client.stop_notify(self._notify_char)
+                    for notify_char in self._notify_chars:
+                        try:
+                            await self._client.stop_notify(notify_char)
+                        except Exception:  # noqa: BLE001
+                            pass
                 except Exception:  # noqa: BLE001
                     pass
                 await self._client.disconnect()
@@ -323,16 +346,22 @@ class XDFanController:
     # ---- internal helpers -------------------------------------------------
 
     def _discover_characteristics(self, client: BleakClient) -> None:
-        """Find writable and notify characteristics.
+        """Collect writable and notify characteristics on private services.
 
-        Mirrors the WeChat mini-program logic: it used the 3rd primary
-        service (services[2]) and, within that single service, picked the
-        characteristic exposing the ``write`` property for writing and the
-        ``notify`` / ``indicate`` property for notifications.
+        The WeChat mini-program subscribed to *every* notify/indicate
+        characteristic on the target service (its global value-change
+        handler received frames from any of them) and wrote to *every*
+        writable characteristic. It relied on service ordering (services[2])
+        which is not portable: bleak enumerates services in a different order
+        than WeChat, and standard GATT services (0x1800/0x1801) may appear at
+        that index.
 
-        We log every discovered service / characteristic so the actual GATT
-        layout can be verified, then apply the same "3rd service" selection
-        with a fallback that scans all services if needed.
+        So instead of guessing one service by index, we scan *all* private
+        services (UUIDs that are not the standard 0x1800/0x1801) and gather
+        every writable and every notify/indicate characteristic. We then
+        subscribe to all notify characteristics and write to the primary
+        writable one, mirroring the mini-program's "subscribe/write to all"
+        behaviour without depending on enumeration order.
         """
         services = list(client.services)
 
@@ -346,89 +375,56 @@ class XDFanController:
                     ",".join(char.properties),
                 )
 
-        write_char = None
-        notify_char = None
+        write_chars: list[BleakGATTCharacteristic] = []
+        write_no_resp_chars: list[BleakGATTCharacteristic] = []
+        notify_chars: list[BleakGATTCharacteristic] = []
 
-        def _pick_from_service(service) -> tuple:
-            # The mini-program only ever wrote to a characteristic exposing the
-            # standard ``write`` (write-with-response) property. Match that
-            # exactly: prefer a "write" characteristic; only fall back to a
-            # write-without-response one when no response-capable write exists.
-            w = w_no_resp = n = None
+        for service in services:
+            if _is_standard_service(service.uuid):
+                # Skip Generic Access (0x1800) / Generic Attribute (0x1801);
+                # the device's control/notify lives on its private services.
+                continue
             for char in service.characteristics:
                 props = char.properties
-                if w is None and "write" in props:
-                    w = char
-                if w_no_resp is None and "write-without-response" in props:
-                    w_no_resp = char
-                if n is None and ("notify" in props or "indicate" in props):
-                    n = char
-            return (w or w_no_resp), n
+                if "write" in props:
+                    write_chars.append(char)
+                elif "write-without-response" in props:
+                    write_no_resp_chars.append(char)
+                if "notify" in props or "indicate" in props:
+                    notify_chars.append(char)
 
-        # Primary strategy: the mini-program's primary services[2].
-        if len(services) > 2 and getattr(services[2], "is_primary", True):
-            write_char, notify_char = _pick_from_service(services[2])
-            if write_char is not None:
-                _LOGGER.info(
-                    "XD fan using services[2] uuid=%s for write/notify",
-                    services[2].uuid,
-                )
+        # If no private service exposed a writable characteristic (unexpected),
+        # fall back to scanning *all* services so we still function.
+        if not write_chars and not write_no_resp_chars and not notify_chars:
+            for service in services:
+                for char in service.characteristics:
+                    props = char.properties
+                    if "write" in props:
+                        write_chars.append(char)
+                    elif "write-without-response" in props:
+                        write_no_resp_chars.append(char)
+                    if "notify" in props or "indicate" in props:
+                        notify_chars.append(char)
 
-        # Fallback: scan every service. The mini-program relied on write and
-        # notify living on the *same* service, so prefer a service that
-        # exposes both - otherwise we may subscribe to the wrong notify
-        # characteristic and never receive the device's status echo.
-        if write_char is None:
-            for service in services:
-                w, n = _pick_from_service(service)
-                if w is not None and n is not None:
-                    write_char, notify_char = w, n
-                    _LOGGER.info(
-                        "XD fan fallback service (write+notify) uuid=%s",
-                        service.uuid,
-                    )
-                    break
-        # Secondary fallback: any service with a writable characteristic.
-        if write_char is None:
-            for service in services:
-                w, n = _pick_from_service(service)
-                if w is not None:
-                    write_char = w
-                    notify_char = n if n is not None else notify_char
-                    _LOGGER.info(
-                        "XD fan fallback service (write only) uuid=%s",
-                        service.uuid,
-                    )
-                    break
-        if notify_char is None:
-            for service in services:
-                _, n = _pick_from_service(service)
-                if n is not None:
-                    notify_char = n
-                    _LOGGER.info(
-                        "XD fan notify fallback picked uuid=%s from service=%s",
-                        notify_char.uuid,
-                        service.uuid,
-                    )
-                    break
+        # Prefer write-with-response characteristics (the mini-program's
+        # default write type); keep write-without-response ones as extras.
+        all_writes = write_chars + write_no_resp_chars
+        self._write_chars = all_writes
+        self._write_char = all_writes[0] if all_writes else None
+        self._notify_chars = notify_chars
 
-        self._write_char = write_char
-        self._notify_char = notify_char
         _LOGGER.info(
-            "XD fan selected chars: write=%s (props=%s) notify=%s (props=%s)",
-            getattr(write_char, "uuid", None),
-            ",".join(write_char.properties) if write_char else None,
-            getattr(notify_char, "uuid", None),
-            ",".join(notify_char.properties) if notify_char else None,
+            "XD fan selected: write=%s writes=%s notify=%s",
+            getattr(self._write_char, "uuid", None),
+            [c.uuid for c in all_writes],
+            [c.uuid for c in notify_chars],
         )
-        if write_char is not None and notify_char is not None and \
-                write_char.uuid == notify_char.uuid:
+        if not notify_chars:
             _LOGGER.warning(
-                "XD fan write and notify are the same characteristic (%s); "
-                "state echo may not arrive - check GATT layout above",
-                write_char.uuid,
+                "XD fan found no notify/indicate characteristic; the device "
+                "cannot echo its state - check the GATT layout logged above"
             )
-        if write_char is None:
+        if self._write_char is None:
             raise RuntimeError("No writable characteristic found on XD fan")
 
     def _build_packet(self, index: int, value: int) -> list[int]:

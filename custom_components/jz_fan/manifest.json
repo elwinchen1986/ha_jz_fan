@@ -9,5 +9,5 @@
   "issue_tracker": "https://github.com/elwinchen1986/ha_jz_fan/issues",
   "iot_class": "local_polling",
   "requirements": ["bleak>=0.21.0", "bleak-retry-connector>=3.4.0"],
-  "version": "1.2.5"
+  "version": "1.2.6-test"
 }

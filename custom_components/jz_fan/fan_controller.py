@@ -209,6 +209,10 @@ class XDFanController:
                 client.is_connected,
             )
             self._client = client
+            # BlueZ can return from establish_connection before the GATT
+            # service table is resolved; discovering characteristics then
+            # would select nothing and leave the fan silent. Wait first.
+            await self._await_services_resolved(client)
             self._discover_characteristics(client)
             self.state.available = True
             self._notify_listeners()
@@ -498,6 +502,51 @@ class XDFanController:
 
     # ---- internal helpers -------------------------------------------------
 
+    async def _await_services_resolved(
+        self,
+        client: BleakClient,
+        timeout: float = 10.0,
+        interval: float = 0.25,
+    ) -> None:
+        """Wait until the GATT service table is actually resolved.
+
+        With the BlueZ backend ``establish_connection`` can return before the
+        peripheral's services have been resolved, in which case
+        ``client.services`` is empty. Running characteristic discovery at that
+        moment silently selects nothing -> no write char, no notify char, and
+        the fan state never updates. So before discovering we poll until at
+        least one service (with characteristics) shows up, or time out.
+        """
+        deadline = time.monotonic() + timeout
+        attempt = 0
+        while True:
+            attempt += 1
+            services = list(client.services)
+            has_chars = any(s.characteristics for s in services)
+            if services and has_chars:
+                _LOGGER.debug(
+                    "XD fan services resolved: %d service(s) after %d attempt(s)",
+                    len(services),
+                    attempt,
+                )
+                return
+            if time.monotonic() >= deadline:
+                _LOGGER.warning(
+                    "XD fan services still empty after %.1fs (%d attempts); "
+                    "proceeding with discover anyway",
+                    timeout,
+                    attempt,
+                )
+                return
+            _LOGGER.debug(
+                "XD fan services not resolved yet (attempt %d, %d service(s)); "
+                "waiting %.2fs",
+                attempt,
+                len(services),
+                interval,
+            )
+            await asyncio.sleep(interval)
+
     def _discover_characteristics(self, client: BleakClient) -> None:
         """Pick the single private service the device really talks over.
 
@@ -653,6 +702,32 @@ class XDFanController:
                         "XD fan discover FALLBACK-2 picked notify=%s from "
                         "service=%s", notify.uuid, service.uuid,
                     )
+
+        # Hand the selected characteristic(s) back to the controller instance.
+        # Without this assignment self._write_char stays None and
+        # self._notify_chars stays empty, so async_connect logs
+        # "notify_chars=[]" / "Write skipped, no write characteristic" and
+        # no notify ever fires - which is why the device's accumulated-hour
+        # field never updates. Mirroring the mini-program's behaviour: pick
+        # the real command service and only operate on *its* chars.
+        if chosen_write is not None:
+            self._write_char = chosen_write
+            self._write_chars = [chosen_write]
+        if chosen_notify is not None:
+            self._notify_chars = [chosen_notify]
+        _LOGGER.debug(
+            "XD fan discover RESULT write=%s notify=%s service=%s",
+            getattr(self._write_char, "uuid", None),
+            [c.uuid for c in self._notify_chars],
+            chosen_uuid,
+        )
+        if self._write_char is None or not self._notify_chars:
+            _LOGGER.error(
+                "XD fan discover FAILED: no usable write+notify pair on "
+                "device (write=%s notify=%s). Cannot control fan.",
+                self._write_char,
+                self._notify_chars,
+            )
 
     def _build_packet(self, index: int, value: int) -> list[int]:
         """Build a full control packet with only one field changed."""
@@ -930,6 +1005,21 @@ class XDFanController:
                 "XD fan notify with UNEXPECTED HEADER %s (want AA 55 10 00 "
                 "0A). Device may be echoing a different protocol.",
                 bytes(data[:5]).hex(" "),
+            )
+        # Echo-mode detector: a frame whose payload bytes are mostly 0xFF
+        # (NO_CHANGE) means the device is echoing what we last wrote rather
+        # than reporting real state. This is one of the only ways to spot
+        # "notify arrives but state never changes" at a glance.
+        payload = n[IDX_POWER:]
+        no_change_count = sum(1 for b in payload if b == NO_CHANGE)
+        if no_change_count >= 8:
+            _LOGGER.warning(
+                "XD fan notify ECHO-MODE: %d/15 payload bytes are NO_CHANGE "
+                "(0xFF) — device is echoing the last write, NOT reporting "
+                "real state. State will NOT update from this frame. "
+                "raw=%s",
+                no_change_count,
+                bytes(data).hex(" "),
             )
         before = self.state.as_dict()
         s = self.state

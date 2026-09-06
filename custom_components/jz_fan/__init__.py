@@ -9,7 +9,12 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 
-from .const import CONF_ADDRESS, DOMAIN
+from .const import (
+    CONF_ADDRESS,
+    CONF_POLL_INTERVAL,
+    DEFAULT_POLL_INTERVAL,
+    DOMAIN,
+)
 from .fan_controller import XDFanController
 
 _LOGGER = logging.getLogger(__name__)
@@ -34,7 +39,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             f"Could not find XD fan with address {address}"
         )
 
-    controller = XDFanController(ble_device, address)
+    poll_interval = entry.options.get(
+        CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL
+    )
+    controller = XDFanController(ble_device, address, poll_interval=poll_interval)
 
     try:
         await controller.async_connect()
@@ -42,6 +50,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         raise ConfigEntryNotReady(
             f"Could not connect to XD fan {address}: {err}"
         ) from err
+
+    # Poll the fan periodically so state changes made physically (device
+    # buttons / remote) are reflected back into Home Assistant, and so the
+    # connection is re-established if it drops.
+    controller.start_polling()
 
     # Track advertisements so we can refresh the BLEDevice reference and
     # reconnect if the device drops off and comes back.

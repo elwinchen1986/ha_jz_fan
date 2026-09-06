@@ -18,6 +18,17 @@
       "already_configured": "This device is already configured."
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "JZ Smart Fan",
+        "description": "Adjust how often the fan state is polled over Bluetooth.",
+        "data": {
+          "poll_interval": "State poll interval (seconds)"
+        }
+      }
+    }
+  },
   "entity": {
     "fan": {
       "fan": {
@@ -76,6 +87,9 @@
       },
       "manual_right": {
         "name": "Nudge right"
+      },
+      "refresh_state": {
+        "name": "Refresh state"
       }
     }
   }

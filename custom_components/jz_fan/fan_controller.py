@@ -25,10 +25,12 @@ from .const import (
     IDX_TIMING,
     IDX_TRUMPET,
     IDX_UD_SWING,
+    DEFAULT_POLL_INTERVAL,
     INIT_PACKETS,
     NO_CHANGE,
     OFF_VALUE,
     ON_VALUE,
+    QUERY_PACKET,
     WRITE_DELAY,
 )
 
@@ -90,6 +92,7 @@ class XDFanController:
         self,
         device: BLEDevice,
         address: str,
+        poll_interval: float = DEFAULT_POLL_INTERVAL,
     ) -> None:
         self._device = device
         self._address = address
@@ -99,6 +102,8 @@ class XDFanController:
         self._lock = asyncio.Lock()
         self.state = FanState()
         self._update_callbacks: list[Callable[[], None]] = []
+        self._poll_task: asyncio.Task | None = None
+        self._poll_interval: float = poll_interval
 
     # ---- public API -------------------------------------------------------
 
@@ -157,6 +162,7 @@ class XDFanController:
             await self._write(pkt)
 
     async def async_disconnect(self) -> None:
+        self.stop_polling()
         async with self._lock:
             if self._client and self._client.is_connected:
                 try:
@@ -168,6 +174,57 @@ class XDFanController:
             self._client = None
             self.state.available = False
             self._notify_listeners()
+
+    async def async_query_state(self) -> None:
+        """Ask the fan to report its full status frame.
+
+        The device answers over the notify characteristic, which keeps Home
+        Assistant in sync with changes made physically (buttons or remote).
+        Safe to call repeatedly.
+        """
+        await self._write(QUERY_PACKET)
+
+    def start_polling(self) -> None:
+        """Start the periodic status-query loop (idempotent)."""
+        if self._poll_interval <= 0:
+            return
+        if self._poll_task is None or self._poll_task.done():
+            self._poll_task = asyncio.ensure_future(self._poll_loop())
+
+    def stop_polling(self) -> None:
+        """Stop the periodic status-query loop."""
+        if self._poll_task is not None:
+            self._poll_task.cancel()
+            self._poll_task = None
+
+    def set_poll_interval(self, seconds: float) -> None:
+        """Update the poll interval; restart the loop if it is running."""
+        self._poll_interval = seconds
+        was_running = (
+            self._poll_task is not None and not self._poll_task.done()
+        )
+        if was_running:
+            self.stop_polling()
+            self.start_polling()
+
+    async def _poll_loop(self) -> None:
+        """Periodically query fan status, reconnecting if the link drops."""
+        try:
+            while True:
+                await asyncio.sleep(self._poll_interval)
+                try:
+                    if not self._client or not self._client.is_connected:
+                        # Link dropped (device power-cycled etc.); bring it
+                        # back so physical changes stay in sync.
+                        await self.async_connect()
+                    else:
+                        await self.async_query_state()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.debug("XD fan poll iteration failed: %s", err)
+        except asyncio.CancelledError:
+            pass
 
     async def async_set_power(self, on: bool) -> None:
         self.state.power = on

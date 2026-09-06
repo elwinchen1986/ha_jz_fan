@@ -108,6 +108,13 @@ class XDFanController:
         self._client: BleakClient | None = None
         self._write_char: BleakGATTCharacteristic | None = None
         self._notify_char: BleakGATTCharacteristic | None = None
+        # During connection we probe every candidate service that exposes a
+        # notify characteristic. ``_candidates`` holds (write, notify) pairs
+        # per service; the first pair to deliver a valid status frame is
+        # locked in as the real command channel (``_channel_locked``).
+        self._candidates: list[tuple] = []
+        self._notify_chars: list[BleakGATTCharacteristic] = []
+        self._channel_locked = False
         self._lock = asyncio.Lock()
         self.state = FanState()
         self._update_callbacks: list[Callable[[], None]] = []
@@ -152,8 +159,18 @@ class XDFanController:
             await self._await_services_resolved(client)
             self._discover_characteristics(client)
 
-            if self._notify_char is not None:
-                await client.start_notify(self._notify_char, self._on_notify)
+            # Subscribe to every candidate notify characteristic; the one
+            # that actually delivers a status frame will lock in the real
+            # command channel (see ``_on_notify``).
+            for notify_char in self._notify_chars:
+                try:
+                    await client.start_notify(notify_char, self._on_notify)
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.debug(
+                        "XD fan start_notify failed for %s: %s",
+                        notify_char.uuid,
+                        err,
+                    )
 
             self.state.available = True
             self._notify_listeners()
@@ -162,10 +179,24 @@ class XDFanController:
         # 666ms write pacing, so the first status frame is not lost.
         await asyncio.sleep(WRITE_DELAY)
 
-        # Init / query packets ask the fan to report its full 15-byte status
-        # frame over notify, which populates the initial (echo) state.
-        for pkt in INIT_PACKETS:
-            await self._write(pkt)
+        # Probe every candidate: send the init/handshake + query packets on
+        # each candidate's write characteristic. Only the correct service
+        # will reply over notify, which locks the channel. Once locked we
+        # stop probing the others.
+        if self._candidates and not self._channel_locked:
+            for write_char, _notify in self._candidates:
+                if self._channel_locked:
+                    break
+                for pkt in INIT_PACKETS:
+                    await self._write(pkt, char=write_char)
+                # Give the device a moment to answer before trying the next
+                # candidate service.
+                await asyncio.sleep(WRITE_DELAY)
+        else:
+            # Init / query packets ask the fan to report its full 15-byte
+            # status frame over notify, populating the initial (echo) state.
+            for pkt in INIT_PACKETS:
+                await self._write(pkt)
 
     def start_polling(self) -> None:
         """Start the background task that keeps state in sync and reconnects."""
@@ -211,11 +242,13 @@ class XDFanController:
             self._poll_task = None
         async with self._lock:
             if self._client and self._client.is_connected:
-                try:
-                    if self._notify_char is not None:
-                        await self._client.stop_notify(self._notify_char)
-                except Exception:  # noqa: BLE001
-                    pass
+                for notify_char in self._notify_chars or [self._notify_char]:
+                    if notify_char is None:
+                        continue
+                    try:
+                        await self._client.stop_notify(notify_char)
+                    except Exception:  # noqa: BLE001
+                        pass
                 await self._client.disconnect()
             self._client = None
             self.state.available = False
@@ -267,14 +300,15 @@ class XDFanController:
     # ---- internal helpers -------------------------------------------------
 
     def _discover_characteristics(self, client: BleakClient) -> None:
-        """Find writable and notify characteristics.
+        """Discover writable/notify characteristics on every private service.
 
-        Mirrors the original app: it used the 3rd primary service
-        (services[2]) and, within that single service, picked the
-        characteristic exposing the ``write`` (write-with-response) property
-        for writing and the ``notify`` / ``indicate`` property for
-        notifications. We log the full GATT layout for troubleshooting and
-        fall back to scanning all services if services[2] is unsuitable.
+        The device exposes several private services (aa01/ee01/ae00/dd01),
+        each with its own write + notify characteristics. Across platforms the
+        service enumeration order differs (BlueZ vs. the original app), so we
+        cannot rely on a fixed index to pick the right one. Instead we collect
+        a (write, notify) candidate pair for every service that has a notify
+        characteristic, subscribe to all of them at connect time, and lock in
+        whichever service actually delivers a status frame.
         """
         services = list(client.services)
 
@@ -287,13 +321,10 @@ class XDFanController:
                     ",".join(char.properties),
                 )
 
-        write_char = None
-        notify_char = None
-
         def _pick_from_service(service) -> tuple:
-            # Prefer a response-capable ``write`` characteristic (what the
-            # original app used); only fall back to write-without-response
-            # when no response-capable write exists.
+            # Prefer a response-capable ``write`` characteristic; only fall
+            # back to write-without-response when no response-capable write
+            # exists on this service.
             w = w_no_resp = n = None
             for char in service.characteristics:
                 props = char.properties
@@ -305,53 +336,42 @@ class XDFanController:
                     n = char
             return (w or w_no_resp), n
 
-        # Primary strategy: the original app's primary services[2].
-        if len(services) > 2 and getattr(services[2], "is_primary", True):
-            write_char, notify_char = _pick_from_service(services[2])
-            if write_char is not None:
+        candidates: list[tuple] = []
+        write_only = None
+        for service in services:
+            w, n = _pick_from_service(service)
+            if w is not None and n is not None:
+                candidates.append((w, n))
                 _LOGGER.debug(
-                    "XD fan using services[2] uuid=%s", services[2].uuid
+                    "XD fan candidate service uuid=%s write=%s notify=%s",
+                    service.uuid,
+                    w.uuid,
+                    n.uuid,
                 )
+            elif w is not None and write_only is None:
+                write_only = w
 
-        # Fallback: prefer a service exposing both write and notify.
-        if write_char is None:
-            for service in services:
-                w, n = _pick_from_service(service)
-                if w is not None and n is not None:
-                    write_char, notify_char = w, n
-                    _LOGGER.debug(
-                        "XD fan fallback service (write+notify) uuid=%s",
-                        service.uuid,
-                    )
-                    break
-        # Secondary fallback: any service with a writable characteristic.
-        if write_char is None:
-            for service in services:
-                w, n = _pick_from_service(service)
-                if w is not None:
-                    write_char = w
-                    notify_char = n if n is not None else notify_char
-                    _LOGGER.debug(
-                        "XD fan fallback service (write only) uuid=%s",
-                        service.uuid,
-                    )
-                    break
-        if notify_char is None:
-            for service in services:
-                _, n = _pick_from_service(service)
-                if n is not None:
-                    notify_char = n
-                    break
+        self._candidates = candidates
+        self._channel_locked = False
+        self._notify_chars = [n for _w, n in candidates]
 
-        self._write_char = write_char
-        self._notify_char = notify_char
+        if candidates:
+            # Default to the first candidate until a notify frame locks the
+            # real channel; keeps control working even before any echo.
+            self._write_char, self._notify_char = candidates[0]
+        else:
+            # No service exposes both; fall back to any writable char so at
+            # least control commands can be sent.
+            self._write_char = write_only
+            self._notify_char = None
+
         _LOGGER.debug(
-            "XD fan selected chars: write=%s (props=%s) notify=%s",
-            getattr(write_char, "uuid", None),
-            ",".join(write_char.properties) if write_char else None,
-            getattr(notify_char, "uuid", None),
+            "XD fan candidates=%d, default write=%s notify=%s",
+            len(candidates),
+            getattr(self._write_char, "uuid", None),
+            getattr(self._notify_char, "uuid", None),
         )
-        if write_char is None:
+        if self._write_char is None:
             raise RuntimeError("No writable characteristic found on XD fan")
 
     def _build_packet(self, index: int, value: int) -> list[int]:
@@ -365,31 +385,32 @@ class XDFanController:
         await self._write(packet)
         self._notify_listeners()
 
-    async def _write(self, packet: list[int]) -> None:
+    async def _write(self, packet: list[int], char=None) -> None:
         async with self._lock:
             if not self._client or not self._client.is_connected:
                 _LOGGER.warning("Write skipped, XD fan not connected")
                 return
-            if self._write_char is None:
+            write_char = char if char is not None else self._write_char
+            if write_char is None:
                 _LOGGER.warning("Write skipped, no write characteristic")
                 return
             data = bytes(packet)
             # The original app used write-with-response by default. Prefer it
             # when the characteristic supports it, falling back to
             # write-without-response only when it is the sole option.
-            props = self._write_char.properties
+            props = write_char.properties
             use_response = "write" in props
             if not use_response and "write-without-response" not in props:
                 use_response = True
             _LOGGER.debug(
                 "XD fan write (response=%s) to %s: %s",
                 use_response,
-                self._write_char.uuid,
+                write_char.uuid,
                 data.hex(" "),
             )
             try:
                 await self._client.write_gatt_char(
-                    self._write_char, data, response=use_response
+                    write_char, data, response=use_response
                 )
             except Exception as err:  # noqa: BLE001
                 _LOGGER.debug(
@@ -398,7 +419,7 @@ class XDFanController:
                     err,
                 )
                 await self._client.write_gatt_char(
-                    self._write_char, data, response=not use_response
+                    write_char, data, response=not use_response
                 )
         # Pace consecutive writes like the original app.
         await asyncio.sleep(WRITE_DELAY)
@@ -411,6 +432,21 @@ class XDFanController:
         if len(n) < 15:
             _LOGGER.debug("Ignoring short notify packet: %s", bytes(data).hex())
             return
+        # First valid frame locks the real command channel to the service
+        # this notification came from, so subsequent control/query writes go
+        # to the characteristic the device actually listens on.
+        if not self._channel_locked:
+            for w, nf in self._candidates:
+                if nf.uuid == _char.uuid:
+                    self._write_char = w
+                    self._notify_char = nf
+                    self._channel_locked = True
+                    _LOGGER.debug(
+                        "XD fan channel locked: write=%s notify=%s",
+                        w.uuid,
+                        nf.uuid,
+                    )
+                    break
         s = self.state
         s.power = _decode_toggle(s.power, n[IDX_POWER])
         s.gear = _decode_value(s.gear, n[IDX_GEAR])

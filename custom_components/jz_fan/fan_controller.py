@@ -132,12 +132,12 @@ class XDFanController:
     async def async_connect(self) -> None:
         """Establish connection, discover characteristics, subscribe, init."""
         # Remember the loop we run on so notify callbacks (fired on a
-        # separate BLE thread) can be marshalled back safely.
+        # separate BLE thread)can be marshalled back safely.
         self._loop = asyncio.get_running_loop()
         async with self._lock:
             if self._client and self._client.is_connected:
                 return
-            _LOGGER.debug("Connecting to XD fan %s", self._address)
+            _LOGGER.info("Connecting to XD fan %s", self._address)
             client = await establish_connection(
                 BleakClient,
                 self._device,
@@ -148,8 +148,23 @@ class XDFanController:
             self._discover_characteristics(client)
 
             if self._notify_char is not None:
-                await client.start_notify(
-                    self._notify_char, self._on_notify
+                try:
+                    await client.start_notify(
+                        self._notify_char, self._on_notify
+                    )
+                    _LOGGER.info(
+                        "XD fan subscribed to notify %s",
+                        self._notify_char.uuid,
+                    )
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.error(
+                        "XD fan start_notify on %s failed: %s",
+                        self._notify_char.uuid,
+                        err,
+                    )
+            else:
+                _LOGGER.error(
+                    "XD fan has no notify characteristic; state will not update"
                 )
 
             self.state.available = True
@@ -294,9 +309,9 @@ class XDFanController:
 
         # Log the full GATT layout for troubleshooting.
         for s_idx, service in enumerate(services):
-            _LOGGER.debug("XD fan service[%d] uuid=%s", s_idx, service.uuid)
+            _LOGGER.info("XD fan service[%d] uuid=%s", s_idx, service.uuid)
             for char in service.characteristics:
-                _LOGGER.debug(
+                _LOGGER.info(
                     "  char uuid=%s props=%s",
                     char.uuid,
                     ",".join(char.properties),
@@ -364,12 +379,20 @@ class XDFanController:
 
         self._write_char = write_char
         self._notify_char = notify_char
-        _LOGGER.debug(
-            "XD fan selected chars: write=%s (props=%s) notify=%s",
+        _LOGGER.info(
+            "XD fan selected chars: write=%s (props=%s) notify=%s (props=%s)",
             getattr(write_char, "uuid", None),
             ",".join(write_char.properties) if write_char else None,
             getattr(notify_char, "uuid", None),
+            ",".join(notify_char.properties) if notify_char else None,
         )
+        if write_char is not None and notify_char is not None and \
+                write_char.uuid == notify_char.uuid:
+            _LOGGER.warning(
+                "XD fan write and notify are the same characteristic (%s); "
+                "state echo may not arrive - check GATT layout above",
+                write_char.uuid,
+            )
         if write_char is None:
             raise RuntimeError("No writable characteristic found on XD fan")
 
@@ -429,9 +452,20 @@ class XDFanController:
         self, _char: BleakGATTCharacteristic, data: bytearray
     ) -> None:
         """Handle a notify packet and update state."""
+        # Log every incoming frame so users can verify the device is
+        # actually pushing status back. This runs on the BLE thread.
+        _LOGGER.info(
+            "XD fan notify recv (%d bytes): %s",
+            len(data),
+            bytes(data).hex(" "),
+        )
         n = list(data)
         if len(n) < 15:
-            _LOGGER.debug("Ignoring short notify packet: %s", bytes(data).hex())
+            _LOGGER.warning(
+                "XD fan short notify frame (%d<15), skipping: %s",
+                len(n),
+                bytes(data).hex(" "),
+            )
             return
         s = self.state
         s.power = _decode_toggle(s.power, n[IDX_POWER])
@@ -443,7 +477,7 @@ class XDFanController:
         s.timing = _decode_value(s.timing, n[IDX_TIMING])
         s.light = _decode_toggle(s.light, n[IDX_LIGHT])
         s.trumpet = _decode_toggle(s.trumpet, n[IDX_TRUMPET])
-        _LOGGER.debug("XD fan state updated: %s", s.as_dict())
+        _LOGGER.info("XD fan state updated: %s", s.as_dict())
         self._notify_listeners()
 
     def _on_disconnect(self, _client: BleakClient) -> None:

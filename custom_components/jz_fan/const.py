@@ -41,7 +41,11 @@ INIT_PACKETS = [
 # The mini-program sends this once on connect; a persistent HA connection
 # must poll it periodically so that state changes made physically (buttons /
 # remote) are reflected back into Home Assistant.
-QUERY_PACKET = [0xAA, 0x55, 0x21, 0x00, 0x01]
+#
+# Cmd byte 0x10 means "report status"; the device replies on the notify
+# characteristic with the full 15-byte state frame. The two-byte tail
+# (0x01 0x00) is the documented query suffix observed on this firmware.
+QUERY_PACKET = [0xAA, 0x55, 0x10, 0x00, 0x01, 0x00]
 
 # How often to poll the fan for its current status (seconds).
 POLL_INTERVAL = 10

@@ -170,12 +170,28 @@ class XDFanController:
             )
             self._client = client
             self._discover_characteristics(client)
+            self.state.available = True
+            self._notify_listeners()
 
-            # Subscribe to *every* notify/indicate characteristic found on
-            # the private services. The mini-program did the same (its
-            # global value-change handler received frames from any of them),
-            # and on this device the status echo can arrive on a notify
-            # characteristic other than the first one we would have guessed.
+        # The mini-program's per-characteristic loop wrote the handshake
+        # packets *before* it enabled notifications, then subscribed. Some
+        # fan firmwares only switch into "report mode" after they receive the
+        # handshake, so subscribing first (as we did previously) left the
+        # CCCD enabled but the device never pushing. Mirror the app order:
+        #   1. write handshake packets to every writable characteristic
+        #   2. subscribe to every notify/indicate characteristic
+        #   3. send the query packet so the device echoes its full state
+        # Each write is paced by WRITE_DELAY (666ms) like the original app.
+
+        # 1. Handshake first (device enters report mode).
+        for pkt in INIT_PACKETS:
+            await self._write(pkt)
+
+        # 2. Subscribe to *every* notify/indicate characteristic. The
+        # mini-program's global value-change handler received frames from any
+        # of them, and on this device the echo can arrive on a notify
+        # characteristic other than the one we would have guessed.
+        async with self._lock:
             subscribed: list[str] = []
             for notify_char in self._notify_chars:
                 try:
@@ -186,6 +202,10 @@ class XDFanController:
                     )
                     await client.start_notify(notify_char, self._on_notify)
                     subscribed.append(notify_char.uuid)
+                    # Explicitly enable the CCCD descriptor. Some bleak
+                    # backends do not reliably write 0x2902 during
+                    # start_notify, which leaves the device silent.
+                    await self._enable_cccd(client, notify_char)
                 except Exception as err:  # noqa: BLE001
                     _LOGGER.error(
                         "XD fan start_notify on %s failed: %s",
@@ -203,21 +223,9 @@ class XDFanController:
                     "state will not update"
                 )
 
-            self.state.available = True
-            self._notify_listeners()
-
-        # Give the device a moment to be ready after the connection is
-        # established and notifications are subscribed. The mini-program
-        # delayed every write by 666ms, so the query packets below are only
-        # sent once the link has settled and the notify subscription is
-        # active - otherwise the device's first status frame can be lost.
-        await asyncio.sleep(WRITE_DELAY)
-
-        # Send init / query packets. These ask the fan to report its full
-        # 15-byte status frame back over the notify characteristic, which is
-        # what populates the initial state (echo) after connecting.
-        for pkt in INIT_PACKETS:
-            await self._write(pkt)
+        # 3. Query the full status frame now that the device is in report
+        # mode and we are listening. This is what populates the initial echo.
+        await self._write(QUERY_PACKET)
 
         _LOGGER.info(
             "XD fan connected and initialized: write=%s notify=%s "
@@ -447,50 +455,87 @@ class XDFanController:
                 _LOGGER.warning("Write skipped, no write characteristic")
                 return
             data = bytes(packet)
-            # The mini-program used wx.writeBLECharacteristicValue, whose
-            # default write type is "write with response". Prefer that when
-            # the characteristic supports it, and fall back to
-            # write-without-response only when it is the sole option.
-            props = self._write_char.properties
-            use_response = "write" in props
-            if not use_response and "write-without-response" not in props:
-                # No standard write property advertised; try with response.
-                use_response = True
-            # Log every write at INFO so the protocol is visible without
-            # having to bump the custom_components.jz_fan logger to DEBUG.
-            _LOGGER.info(
-                "XD fan write (response=%s, len=%d) to %s: %s",
-                use_response,
-                len(data),
-                self._write_char.uuid,
-                data.hex(" "),
-            )
-            try:
-                await self._client.write_gatt_char(
-                    self._write_char, data, response=use_response
-                )
-            except Exception as err:  # noqa: BLE001
-                # Some stacks reject the chosen write type; retry the other.
-                # Surface this at WARNING so an unanswered device is obvious
-                # without needing to enable DEBUG logging.
-                _LOGGER.warning(
-                    "XD fan write failed (response=%s) -> %s; "
-                    "retrying with response=%s",
+            targets = self._write_chars or [self._write_char]
+            # We do not know which private service is the device's real
+            # command channel, and the status echo only starts once the
+            # handshake reaches it. So write the packet to *every* writable
+            # characteristic; the device ignores frames on the wrong channel.
+            for idx, wchar in enumerate(targets):
+                props = wchar.properties
+                use_response = "write" in props
+                if not use_response and \
+                        "write-without-response" not in props:
+                    use_response = True
+                _LOGGER.info(
+                    "XD fan write (response=%s, len=%d) to %s: %s",
                     use_response,
-                    err,
-                    not use_response,
+                    len(data),
+                    wchar.uuid,
+                    data.hex(" "),
                 )
                 try:
                     await self._client.write_gatt_char(
-                        self._write_char, data, response=not use_response
+                        wchar, data, response=use_response
                     )
-                except Exception as err2:  # noqa: BLE001
-                    _LOGGER.error(
-                        "XD fan write retry also failed: %s", err2
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.warning(
+                        "XD fan write to %s failed (response=%s) -> %s; "
+                        "retrying with response=%s",
+                        wchar.uuid,
+                        use_response,
+                        err,
+                        not use_response,
                     )
-                    raise
+                    try:
+                        await self._client.write_gatt_char(
+                            wchar, data, response=not use_response
+                        )
+                    except Exception as err2:  # noqa: BLE001
+                        _LOGGER.error(
+                            "XD fan write to %s retry also failed: %s",
+                            wchar.uuid,
+                            err2,
+                        )
+                if idx < len(targets) - 1:
+                    await asyncio.sleep(0.1)
         # Pace consecutive writes like the original app.
         await asyncio.sleep(WRITE_DELAY)
+
+    async def _enable_cccd(
+        self, client: BleakClient, notify_char: BleakGATTCharacteristic
+    ) -> None:
+        """Explicitly write the Client Characteristic Config descriptor.
+
+        Some bleak backends do not reliably write the CCCD (0x2902) when
+        start_notify is called, so the device never actually starts pushing
+        notifications. We locate the 0x2902 descriptor on the characteristic
+        and write [0x01, 0x00] (notify) or [0x02, 0x00] (indicate). Failures
+        are non-fatal: many backends already handled it inside start_notify.
+        """
+        try:
+            cccd = None
+            for descriptor in notify_char.descriptors:
+                if str(descriptor.uuid).lower().startswith("00002902"):
+                    cccd = descriptor
+                    break
+            if cccd is None:
+                return
+            if "indicate" in notify_char.properties:
+                value = bytes([0x02, 0x00])
+            else:
+                value = bytes([0x01, 0x00])
+            await client.write_gatt_descriptor(cccd.handle, value)
+            _LOGGER.info(
+                "XD fan CCCD written on %s: %s",
+                notify_char.uuid,
+                value.hex(" "),
+            )
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug(
+                "XD fan CCCD write on %s skipped: %s",
+                notify_char.uuid,
+                err,
+            )
 
     def _on_notify(
         self, _char: BleakGATTCharacteristic, data: bytearray

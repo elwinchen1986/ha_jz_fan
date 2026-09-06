@@ -149,6 +149,11 @@ class XDFanController:
 
             if self._notify_char is not None:
                 try:
+                    _LOGGER.info(
+                        "Subscribing to notify on %s (props=%s)",
+                        self._notify_char.uuid,
+                        ",".join(self._notify_char.properties),
+                    )
                     await client.start_notify(
                         self._notify_char, self._on_notify
                     )
@@ -158,13 +163,24 @@ class XDFanController:
                     )
                 except Exception as err:  # noqa: BLE001
                     _LOGGER.error(
-                        "XD fan start_notify on %s failed: %s",
+                        "XD fan start_notify on %s failed: %s; "
+                        "no state echo will arrive",
                         self._notify_char.uuid,
                         err,
                     )
             else:
+                # Dump every candidate notify-capable characteristic we
+                # discovered, so the user can see *why* none was picked.
+                candidates: list[tuple[str, str]] = []
+                for service in services:
+                    for ch in service.characteristics:
+                        props = ",".join(ch.properties)
+                        if "notify" in props or "indicate" in props:
+                            candidates.append((ch.uuid, props))
                 _LOGGER.error(
-                    "XD fan has no notify characteristic; state will not update"
+                    "XD fan has no notify characteristic; state will not "
+                    "update. Notify/indicate candidates seen: %s",
+                    candidates or "<none>",
                 )
 
             self.state.available = True
@@ -182,6 +198,14 @@ class XDFanController:
         # what populates the initial state (echo) after connecting.
         for pkt in INIT_PACKETS:
             await self._write(pkt)
+
+        _LOGGER.info(
+            "XD fan connected and initialized: write=%s notify=%s "
+            "subscribed=%s",
+            getattr(self._write_char, "uuid", None),
+            getattr(self._notify_char, "uuid", None),
+            self._notify_char is not None,
+        )
 
     async def async_disconnect(self) -> None:
         self.stop_polling()
@@ -238,13 +262,18 @@ class XDFanController:
                     if not self._client or not self._client.is_connected:
                         # Link dropped (device power-cycled etc.); bring it
                         # back so physical changes stay in sync.
+                        _LOGGER.info(
+                            "XD fan poll: link not connected, reconnecting"
+                        )
                         await self.async_connect()
                     else:
                         await self.async_query_state()
                 except asyncio.CancelledError:
                     raise
                 except Exception as err:  # noqa: BLE001
-                    _LOGGER.debug("XD fan poll iteration failed: %s", err)
+                    _LOGGER.warning(
+                        "XD fan poll iteration failed: %s", err
+                    )
         except asyncio.CancelledError:
             pass
 
@@ -340,8 +369,9 @@ class XDFanController:
         if len(services) > 2 and getattr(services[2], "is_primary", True):
             write_char, notify_char = _pick_from_service(services[2])
             if write_char is not None:
-                _LOGGER.debug(
-                    "XD fan using services[2] uuid=%s", services[2].uuid
+                _LOGGER.info(
+                    "XD fan using services[2] uuid=%s for write/notify",
+                    services[2].uuid,
                 )
 
         # Fallback: scan every service. The mini-program relied on write and
@@ -353,7 +383,7 @@ class XDFanController:
                 w, n = _pick_from_service(service)
                 if w is not None and n is not None:
                     write_char, notify_char = w, n
-                    _LOGGER.debug(
+                    _LOGGER.info(
                         "XD fan fallback service (write+notify) uuid=%s",
                         service.uuid,
                     )
@@ -365,7 +395,7 @@ class XDFanController:
                 if w is not None:
                     write_char = w
                     notify_char = n if n is not None else notify_char
-                    _LOGGER.debug(
+                    _LOGGER.info(
                         "XD fan fallback service (write only) uuid=%s",
                         service.uuid,
                     )
@@ -375,6 +405,11 @@ class XDFanController:
                 _, n = _pick_from_service(service)
                 if n is not None:
                     notify_char = n
+                    _LOGGER.info(
+                        "XD fan notify fallback picked uuid=%s from service=%s",
+                        notify_char.uuid,
+                        service.uuid,
+                    )
                     break
 
         self._write_char = write_char
@@ -425,9 +460,12 @@ class XDFanController:
             if not use_response and "write-without-response" not in props:
                 # No standard write property advertised; try with response.
                 use_response = True
-            _LOGGER.debug(
-                "XD fan write (response=%s) to %s: %s",
+            # Log every write at INFO so the protocol is visible without
+            # having to bump the custom_components.jz_fan logger to DEBUG.
+            _LOGGER.info(
+                "XD fan write (response=%s, len=%d) to %s: %s",
                 use_response,
+                len(data),
                 self._write_char.uuid,
                 data.hex(" "),
             )
@@ -437,14 +475,24 @@ class XDFanController:
                 )
             except Exception as err:  # noqa: BLE001
                 # Some stacks reject the chosen write type; retry the other.
-                _LOGGER.debug(
-                    "XD fan write failed (response=%s): %s; retrying",
+                # Surface this at WARNING so an unanswered device is obvious
+                # without needing to enable DEBUG logging.
+                _LOGGER.warning(
+                    "XD fan write failed (response=%s) -> %s; "
+                    "retrying with response=%s",
                     use_response,
                     err,
+                    not use_response,
                 )
-                await self._client.write_gatt_char(
-                    self._write_char, data, response=not use_response
-                )
+                try:
+                    await self._client.write_gatt_char(
+                        self._write_char, data, response=not use_response
+                    )
+                except Exception as err2:  # noqa: BLE001
+                    _LOGGER.error(
+                        "XD fan write retry also failed: %s", err2
+                    )
+                    raise
         # Pace consecutive writes like the original app.
         await asyncio.sleep(WRITE_DELAY)
 
